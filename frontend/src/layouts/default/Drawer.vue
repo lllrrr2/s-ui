@@ -32,7 +32,7 @@
       </v-list-item>
     </v-list>
     <template v-slot:append>
-      <v-list-item prepend-icon="mdi-logout" :title="$t('menu.logout')" @click="logout"></v-list-item>
+      <v-list-item prepend-icon="mdi-logout" :title="$t('menu.logout')" @click="Logout"></v-list-item>
     </template>
   </v-navigation-drawer>
 </template>
@@ -40,7 +40,7 @@
 <script lang="ts" setup>
 import { computed } from 'vue'
 import router from '@/router'
-import HttpUtil from '@/plugins/httputil'
+import { logout } from '@/plugins/httputil'
 
 const props = defineProps(['isMobile','displayDrawer'])
 
@@ -55,13 +55,11 @@ const menu = [
   { title: 'pages.outbounds', icon: 'mdi-cloud-upload',  path: '/outbounds' },
   { title: 'pages.rules', icon: 'mdi-routes',  path: '/rules' },
   { title: 'pages.basics', icon: 'mdi-application-cog',  path: '/basics' },
+  { title: 'pages.admins', icon: 'mdi-account-tie',  path: '/admins' },
   { title: 'pages.settings', icon: 'mdi-cog',  path: '/settings' },
 ]
 
-const logout = async () => {
-  const response = await HttpUtil.get('/api/logout')
-  if(response.success){
-    router.push('/login')
-  }
+const Logout = async () => {
+  logout()
 }
 </script>

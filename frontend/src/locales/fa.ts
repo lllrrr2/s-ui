@@ -17,6 +17,7 @@ export default {
   network: "شبکه",
   copyToClipboard: "کپی در حافظه",
   noData: "بدون داده!",
+  invalidLogin: "ورود نامعتبر!",
   online: "آنلاین",
   pages: {
     login: "ورود",
@@ -26,6 +27,7 @@ export default {
     clients: "کاربران",
     rules: "قوانین",
     basics: "ترازها",
+    admins: "ادمین‌ها",
     settings: "پیکربندی",
   },
   main: {
@@ -69,10 +71,12 @@ export default {
     del: "حذف",
     save: "ذخیره",
     update: "بروزرسانی",
+    submit: "ارسال",
     close: "بستن",
     restartApp: "ریستارت پنل",
   },
   login: {
+    title: "ورود",
     username: "نام کاربری",
     unRules: "نام کاربری نمی‌تواند خالی باشد",
     password: "کلمه عبور",
@@ -81,14 +85,22 @@ export default {
   menu: {
     logout: "خروج",
   },
+  admin: {
+    changeCred: "ویرایش داده‌ها",
+    oldPass: "رمز کنونی",
+    newUname: "نام کاربری جدید",
+    newPass: "رمز جدید",
+  },
   setting: {
     interface: "نما",
     sub: "سابسکریپشن",
     addr: "آدرس",
     port: "پورت",
+    webPath: "مسیر پایه",
     domain: "دامنه",
     sslKey: "مسیر فایل کلید",
     sslCert: "مسیر فایل گواهی",
+    webUri: "آدرس نهایی پنل",
     sessionAge: "بیشینه زمان لاگین ماندن",
     timeLoc: "منطقه زمانی",
     subEncode: "رمزگذاری",

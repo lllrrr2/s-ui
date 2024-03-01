@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"embed"
+	"html/template"
 	"io"
 	"io/fs"
 	"net"
@@ -17,9 +18,9 @@ import (
 	"strconv"
 	"strings"
 
+	sessions "github.com/Calidity/gin-sessions"
+	"github.com/Calidity/gin-sessions/cookie"
 	"github.com/gin-contrib/gzip"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 )
 
@@ -53,6 +54,19 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 
 	engine := gin.Default()
 
+	// Load the HTML template
+	t := template.New("").Funcs(engine.FuncMap)
+	template, err := t.ParseFS(content, "html/index.html")
+	if err != nil {
+		return nil, err
+	}
+	engine.SetHTMLTemplate(template)
+
+	base_url, err := s.settingService.GetWebPath()
+	if err != nil {
+		return nil, err
+	}
+
 	webDomain, err := s.settingService.GetWebDomain()
 	if err != nil {
 		return nil, err
@@ -68,10 +82,11 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	}
 
 	engine.Use(gzip.Gzip(gzip.DefaultCompression))
-	assetsBasePath := "/assets/"
+	assetsBasePath := base_url + "assets/"
 
 	store := cookie.NewStore(secret)
-	engine.Use(sessions.Sessions("session", store))
+	engine.Use(sessions.Sessions("s-ui", store))
+
 	engine.Use(func(c *gin.Context) {
 		uri := c.Request.RequestURI
 		if strings.HasPrefix(uri, assetsBasePath) {
@@ -87,26 +102,25 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 
 	engine.StaticFS(assetsBasePath, http.FS(assetsFS))
 
-	group_api := engine.Group("/api")
+	group_api := engine.Group(base_url + "api")
 	api.NewAPIHandler(group_api)
 
 	// Serve index.html as the entry point
 	// Handle all other routes by serving index.html
 	engine.NoRoute(func(c *gin.Context) {
-		if c.Request.URL.Path != "/login" && !api.IsLogin(c) {
-			c.Redirect(http.StatusTemporaryRedirect, "/login")
+		if !strings.HasPrefix(c.Request.URL.Path, base_url) {
+			c.String(404, "")
 			return
 		}
-		if c.Request.URL.Path == "/login" && api.IsLogin(c) {
-			c.Redirect(http.StatusTemporaryRedirect, "/")
+		if c.Request.URL.Path != base_url+"login" && !api.IsLogin(c) {
+			c.Redirect(http.StatusTemporaryRedirect, base_url+"login")
 			return
 		}
-		data, err := content.ReadFile("html/index.html")
-		if err != nil {
-			c.String(http.StatusInternalServerError, "Internal Server Error")
+		if c.Request.URL.Path == base_url+"login" && api.IsLogin(c) {
+			c.Redirect(http.StatusTemporaryRedirect, base_url)
 			return
 		}
-		c.Data(http.StatusOK, "text/html", data)
+		c.HTML(http.StatusOK, "index.html", gin.H{"BASE_URL": base_url})
 	})
 
 	return engine, nil

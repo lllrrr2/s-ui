@@ -45,6 +45,11 @@ const routes = [
         component: () => import('@/views/Basics.vue'),
       },
       {
+        path: '/admins',
+        name: 'pages.admins',
+        component: () => import('@/views/Admins.vue'),
+      },
+      {
         path: '/settings',
         name: 'pages.settings',
         component: () => import('@/views/Settings.vue'),
@@ -54,7 +59,7 @@ const routes = [
 ]
 
 const router = createRouter({
-  history: createWebHistory(process.env.BASE_URL),
+  history: createWebHistory((window as any).BASE_URL),
   routes,
 })
 
@@ -64,7 +69,7 @@ let intervalId:any
 // Navigation guard to check authentication state
 router.beforeEach((to, from, next) => {
   // Check the session cookie
-  const sessionCookie = document.cookie.split(';').find(cookie => cookie.trim().startsWith('session='))
+  const sessionCookie = document.cookie.split(';').find(cookie => cookie.trim().startsWith('s-ui='))
   const isAuthenticated = !!sessionCookie
 
   // If the route requires authentication and the user is not authenticated, redirect to /login

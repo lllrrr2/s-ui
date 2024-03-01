@@ -24,7 +24,7 @@
     @close="closeStats"
   />
   <v-row>
-    <v-col cols="12">
+    <v-col cols="12" justify="center" align="center">
       <v-btn color="primary" @click="showModal(-1)">{{ $t('actions.add') }}</v-btn>
     </v-col>
   </v-row>
@@ -73,7 +73,7 @@
                   {{ $t('remained') }}: {{ HumanReadable.sizeFormat(item.volume - (item.up + item.down)) }}
                 </template>
               </v-tooltip>
-              {{ item.volume>0 ? HumanReadable.sizeFormat(item.up + item.down) : $t('unlimited') }}
+              {{ HumanReadable.sizeFormat(item.up + item.down) }}
             </v-col>
           </v-row>
           <v-row>
@@ -221,7 +221,7 @@ const buildInboundsUsers = (inboundTags:string[]) => {
           // Remove flow in non tls VLESS
           if (newInbound.type == InTypes.VLESS) {
             const vlessInbound = <VLESS>newInbound
-            if (!vlessInbound.tls?.enabled) delete(clientConfig["vless"].flow)
+            if (!vlessInbound.tls?.enabled || vlessInbound.transport?.type) delete(clientConfig["vless"].flow)
           }
           users.push(clientConfig[newInbound.type])
         })

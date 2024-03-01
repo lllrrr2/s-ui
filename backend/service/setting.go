@@ -21,6 +21,8 @@ var defaultValueMap = map[string]string{
 	"webSecret":     common.Random(32),
 	"webCertFile":   "",
 	"webKeyFile":    "",
+	"webPath":       "/app/",
+	"webURI":        "",
 	"sessionMaxAge": "0",
 	"timeLocation":  "Asia/Tehran",
 	"subListen":     "",
@@ -65,6 +67,11 @@ func (s *SettingService) GetAllSetting() (*map[string]string, error) {
 	delete(allSetting, "webSecret")
 
 	return &allSetting, nil
+}
+
+func (s *SettingService) ResetSettings() error {
+	db := database.GetDB()
+	return db.Where("1 = 1").Delete(model.Setting{}).Error
 }
 
 func (s *SettingService) getSetting(key string) (*model.Setting, error) {
@@ -158,6 +165,30 @@ func (s *SettingService) GetKeyFile() (string, error) {
 	return s.getString("webKeyFile")
 }
 
+func (s *SettingService) GetWebPath() (string, error) {
+	webPath, err := s.getString("webPath")
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(webPath, "/") {
+		webPath = "/" + webPath
+	}
+	if !strings.HasSuffix(webPath, "/") {
+		webPath += "/"
+	}
+	return webPath, nil
+}
+
+func (s *SettingService) SetWebPath(webPath string) error {
+	if !strings.HasPrefix(webPath, "/") {
+		webPath = "/" + webPath
+	}
+	if !strings.HasSuffix(webPath, "/") {
+		webPath += "/"
+	}
+	return s.setString("webPath", webPath)
+}
+
 func (s *SettingService) GetSecret() ([]byte, error) {
 	secret, err := s.getString("webSecret")
 	if secret == defaultValueMap["webSecret"] {
@@ -195,6 +226,10 @@ func (s *SettingService) GetSubPort() (int, error) {
 	return s.getInt("subPort")
 }
 
+func (s *SettingService) SetSubPort(subPort int) error {
+	return s.setInt("subPort", subPort)
+}
+
 func (s *SettingService) GetSubPath() (string, error) {
 	subPath, err := s.getString("subPath")
 	if err != nil {
@@ -207,6 +242,16 @@ func (s *SettingService) GetSubPath() (string, error) {
 		subPath += "/"
 	}
 	return subPath, nil
+}
+
+func (s *SettingService) SetSubPath(subPath string) error {
+	if !strings.HasPrefix(subPath, "/") {
+		subPath = "/" + subPath
+	}
+	if !strings.HasSuffix(subPath, "/") {
+		subPath += "/"
+	}
+	return s.setString("subPath", subPath)
 }
 
 func (s *SettingService) GetSubDomain() (string, error) {
@@ -275,6 +320,17 @@ func (s *SettingService) Save(tx *gorm.DB, changes []model.Changes) error {
 			err = s.fileExists(obj)
 			if err != nil {
 				return common.NewError(" -> ", obj, " is not exists")
+			}
+		}
+
+		// Correct Pathes start and ends with `/`
+		if key == "webPath" ||
+			key == "subPath" {
+			if !strings.HasPrefix(obj, "/") {
+				obj = "/" + obj
+			}
+			if !strings.HasSuffix(obj, "/") {
+				obj += "/"
 			}
 		}
 

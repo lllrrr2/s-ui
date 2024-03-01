@@ -17,6 +17,7 @@ export default {
   network: "Network",
   copyToClipboard: "Copy to clipboard",
   noData: "No data!",
+  invalidLogin: "Invalid Login!",
   online: "Online",
   pages: {
     login: "Login",
@@ -26,6 +27,7 @@ export default {
     clients: "Clients",
     rules: "Rules",
     basics: "Basics",
+    admins: "Admins",
     settings: "Settings",
   },
   main: {
@@ -69,10 +71,12 @@ export default {
     del: "Delete",
     save: "Save",
     update: "Update",
+    submit: "Submit",
     close: "Close",
     restartApp: "Restart App",
   },
   login: {
+    title: "Login",
     username: "Username",
     unRules: "Username can not be empty",
     password: "Password",
@@ -81,14 +85,22 @@ export default {
   menu: {
     logout: "Logout",
   },
+  admin: {
+    changeCred: "Change credentials",
+    oldPass: "Current Password",
+    newUname: "New Username",
+    newPass: "New Password",
+  },
   setting: {
     interface: "Interface",
     sub: "Subscription",
     addr: "Address",
     port: "Port",
+    webPath: "Base URI",
     domain: "Domain",
     sslKey: "SSL Key Path",
     sslCert: "SSL Certificate Path",
+    webUri: "Panel URI",
     sessionAge: "Session Maximum Age",
     timeLoc: "Timezone Location",
     subEncode: "Enable Encoding",

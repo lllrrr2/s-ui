@@ -16,7 +16,7 @@
     @close="closeStats"
   />
   <v-row>
-    <v-col cols="12">
+    <v-col cols="12" justify="center" align="center">
       <v-btn color="primary" @click="showModal(-1)">{{ $t('actions.add') }}</v-btn>
     </v-col>
   </v-row>
@@ -53,7 +53,7 @@
               <v-tooltip activator="parent" dir="ltr" location="bottom" v-if="Object.hasOwn(item,'users')">
                 <span v-for="u in findInbounsUsers(item)">{{ u }}<br /></span>
               </v-tooltip>
-              {{ Object.hasOwn(item,'users') ? item.users.length : '-' }}
+              {{ Array.isArray(item.users) ? item.users.length : '-' }}
             </v-col>
           </v-row>
           <v-row>
@@ -236,7 +236,7 @@ const buildInboundsUsers = (inbound:InboundWithUser):Inbound => {
       // Remove flow in non tls VLESS
       if (inbound.type == InTypes.VLESS) {
         const vlessInbound = <VLESS>inbound
-        if (!vlessInbound.tls?.enabled) clientConfig["vless"].flow = undefined
+        if (!vlessInbound.tls?.enabled || vlessInbound.transport?.type) delete(clientConfig["vless"].flow)
       }
       users.push(clientConfig[inbound.type])
     })
