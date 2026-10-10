@@ -7,12 +7,14 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/alireza0/s-ui/config"
 	"github.com/alireza0/s-ui/logger"
 	"github.com/alireza0/s-ui/middleware"
 	"github.com/alireza0/s-ui/network"
 	"github.com/alireza0/s-ui/service"
+	"github.com/alireza0/s-ui/util/common"
 
 	"github.com/gin-gonic/gin"
 )
@@ -101,28 +103,43 @@ func (s *Server) Start() (err error) {
 		return err
 	}
 
-	if certFile != "" || keyFile != "" {
-		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	// Both or neither, same as the panel: an OR here started TLS with half a
+	// configuration and failed with an error that named neither setting.
+	switch {
+	case certFile != "" && keyFile != "":
+		subDomain, err := s.SettingService.GetSubDomain()
 		if err != nil {
 			listener.Close()
 			return err
 		}
-		c := &tls.Config{
-			Certificates: []tls.Certificate{cert},
+		c, err := network.NewTLSConfig(certFile, keyFile, subDomain)
+		if err != nil {
+			listener.Close()
+			return err
 		}
 		listener = network.NewAutoHttpsListener(listener)
 		listener = tls.NewListener(listener, c)
-	}
-
-	if certFile != "" || keyFile != "" {
 		logger.Info("Sub server run https on", listener.Addr())
-	} else {
+	case certFile != "" || keyFile != "":
+		listener.Close()
+		missing, set := "subKeyFile", "subCertFile"
+		if certFile == "" {
+			missing, set = "subCertFile", "subKeyFile"
+		}
+		return common.NewError("TLS needs both a certificate and a key: ", set,
+			" is set but ", missing, " is empty. Set both to serve HTTPS, or clear both to serve HTTP.")
+	default:
 		logger.Info("Sub server run http on", listener.Addr())
 	}
 	s.listener = listener
 
 	s.httpServer = &http.Server{
 		Handler: engine,
+		// This port faces every client of the panel, not just the operator.
+		ReadHeaderTimeout: 20 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	go func() {
@@ -133,20 +150,26 @@ func (s *Server) Start() (err error) {
 }
 
 func (s *Server) Stop() error {
-	s.cancel()
 	var err error
 	if s.httpServer != nil {
-		err = s.httpServer.Shutdown(s.ctx)
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
+		err = s.httpServer.Shutdown(shutdownCtx)
+		cancelShutdown()
 		if err != nil {
+			s.cancel()
+			if s.listener != nil {
+				_ = s.listener.Close()
+			}
 			return err
 		}
-	}
-	if s.listener != nil {
+	} else if s.listener != nil {
 		err = s.listener.Close()
 		if err != nil {
+			s.cancel()
 			return err
 		}
 	}
+	s.cancel()
 	return nil
 }
 

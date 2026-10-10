@@ -46,8 +46,14 @@ func (a *APIHandler) postHandler(c *gin.Context) {
 		a.ApiService.RestartApp(c)
 	case "restartSb":
 		a.ApiService.RestartSb(c)
+	case "maintenance":
+		a.ApiService.SetMaintenance(c)
+	case "resetTraffic":
+		a.ApiService.ResetTraffic(c)
 	case "linkConvert":
 		a.ApiService.LinkConvert(c)
+	case "subConvert":
+		a.ApiService.SubConvert(c)
 	case "importdb":
 		a.ApiService.ImportDb(c)
 	case "addToken":
@@ -56,6 +62,10 @@ func (a *APIHandler) postHandler(c *gin.Context) {
 	case "deleteToken":
 		a.ApiService.DeleteToken(c)
 		a.apiv2.ReloadTokens()
+	case "closeSessions":
+		a.ApiService.CloseSessions(c)
+	case "getCertPing":
+		a.ApiService.GetCertPing(c)
 	default:
 		jsonMsg(c, "failed", common.NewError("unknown action: ", action))
 	}
@@ -85,6 +95,8 @@ func (a *APIHandler) getHandler(c *gin.Context) {
 		a.ApiService.GetStatus(c)
 	case "onlines":
 		a.ApiService.GetOnlines(c)
+	case "sessions":
+		a.ApiService.GetSessions(c)
 	case "logs":
 		a.ApiService.GetLogs(c)
 	case "changes":
@@ -95,6 +107,10 @@ func (a *APIHandler) getHandler(c *gin.Context) {
 		a.ApiService.GetDb(c)
 	case "tokens":
 		a.ApiService.GetTokens(c)
+	case "singbox-config":
+		a.ApiService.GetSingboxConfig(c)
+	case "checkOutbound":
+		a.ApiService.GetCheckOutbound(c)
 	default:
 		jsonMsg(c, "failed", common.NewError("unknown action: ", action))
 	}

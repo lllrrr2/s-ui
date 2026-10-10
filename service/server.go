@@ -1,7 +1,9 @@
 package service
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"runtime"
 	"strconv"
@@ -9,6 +11,8 @@ import (
 	"time"
 
 	"github.com/alireza0/s-ui/config"
+	"github.com/alireza0/s-ui/database"
+	"github.com/alireza0/s-ui/database/model"
 	"github.com/alireza0/s-ui/logger"
 
 	"github.com/sagernet/sing-box/common/tls"
@@ -40,10 +44,11 @@ func (s *ServerService) GetStatus(request string) *map[string]interface{} {
 		case "net":
 			status["net"] = s.GetNetInfo()
 		case "sys":
-			status["uptime"] = s.GetUptime()
 			status["sys"] = s.GetSystemInfo()
 		case "sbd":
 			status["sbd"] = s.GetSingboxInfo()
+		case "db":
+			status["db"] = s.GetDatabaseInfo()
 		}
 	}
 	return &status
@@ -56,16 +61,6 @@ func (s *ServerService) GetCpuPercent() float64 {
 		return 0
 	} else {
 		return percents[0]
-	}
-}
-
-func (s *ServerService) GetUptime() uint64 {
-	upTime, err := host.Uptime()
-	if err != nil {
-		logger.Warning("get uptime failed:", err)
-		return 0
-	} else {
-		return upTime
 	}
 }
 
@@ -144,10 +139,14 @@ func (s *ServerService) GetNetInfo() map[string]interface{} {
 func (s *ServerService) GetSingboxInfo() map[string]interface{} {
 	var rtm runtime.MemStats
 	runtime.ReadMemStats(&rtm)
-	isRunning := corePtr.IsRunning()
+	// One GetInstance, then a nil check. Reading IsRunning and dereferencing
+	// GetInstance separately let a stop land in between, and this is the
+	// endpoint the dashboard polls every few seconds.
+	box := corePtr.GetInstance()
+	isRunning := box != nil
 	uptime := uint32(0)
 	if isRunning {
-		uptime = corePtr.GetInstance().Uptime()
+		uptime = box.Uptime()
 	}
 	return map[string]interface{}{
 		"running": isRunning,
@@ -192,6 +191,7 @@ func (s *ServerService) GetSystemInfo() map[string]interface{} {
 	}
 	info["ipv4"] = ipv4
 	info["ipv6"] = ipv6
+	info["bootTime"], _ = host.BootTime()
 
 	return info
 }
@@ -218,6 +218,8 @@ func (s *ServerService) GenKeypair(keyType string, options string) []string {
 		return s.generateRealityKeyPair()
 	case "wireguard":
 		return s.generateWireGuardKey(options)
+	case "openvpn":
+		return s.generateOpenVPNStaticKey()
 	}
 
 	return []string{"Failed to generate keypair"}
@@ -239,6 +241,29 @@ func (s *ServerService) generateTLSKeyPair(serverName string) []string {
 	return append(strings.Split(string(privateKeyPem), "\n"), strings.Split(string(publicKeyPem), "\n")...)
 }
 
+// generateOpenVPNStaticKey produces what `openvpn --genkey secret` writes: 256
+// random bytes as hex between OpenVPN's own markers. tls-auth and tls-crypt
+// take one of these rather than a PEM, and both ends of a tunnel have to carry
+// the same one.
+func (s *ServerService) generateOpenVPNStaticKey() []string {
+	material := make([]byte, 256)
+	if _, err := rand.Read(material); err != nil {
+		return []string{"Failed to generate OpenVPN static key: ", err.Error()}
+	}
+	encoded := hex.EncodeToString(material)
+
+	lines := []string{
+		"#",
+		"# 2048 bit OpenVPN static key",
+		"#",
+		"-----BEGIN OpenVPN Static key V1-----",
+	}
+	for offset := 0; offset < len(encoded); offset += 32 {
+		lines = append(lines, encoded[offset:offset+32])
+	}
+	return append(lines, "-----END OpenVPN Static key V1-----")
+}
+
 func (s *ServerService) generateRealityKeyPair() []string {
 	privateKey, err := wgtypes.GeneratePrivateKey()
 	if err != nil {
@@ -258,4 +283,32 @@ func (s *ServerService) generateWireGuardKey(pk string) []string {
 		return []string{"Failed to generate wireguard keypair: ", err.Error()}
 	}
 	return []string{"PrivateKey: " + wgKeys.String(), "PublicKey: " + wgKeys.PublicKey().String()}
+}
+
+func (s *ServerService) GetDatabaseInfo() map[string]int64 {
+	info := make(map[string]int64, 0)
+	db := database.GetDB()
+	if db == nil {
+		return nil
+	}
+
+	var clientsCount, inboundsCount, outboundsCount, servicesCount, endpointsCount, clientUp, clientDown int64
+
+	db.Model(&model.Client{}).Count(&clientsCount)
+	db.Model(&model.Inbound{}).Count(&inboundsCount)
+	db.Model(&model.Outbound{}).Count(&outboundsCount)
+	db.Model(&model.Service{}).Count(&servicesCount)
+	db.Model(&model.Endpoint{}).Count(&endpointsCount)
+	db.Model(&model.Client{}).Select("COALESCE(SUM(up+total_up),0)").Scan(&clientUp)
+	db.Model(&model.Client{}).Select("COALESCE(SUM(down+total_down),0)").Scan(&clientDown)
+
+	info["clients"] = clientsCount
+	info["inbounds"] = inboundsCount
+	info["outbounds"] = outboundsCount
+	info["services"] = servicesCount
+	info["endpoints"] = endpointsCount
+	info["clientUp"] = clientUp
+	info["clientDown"] = clientDown
+
+	return info
 }

@@ -9,73 +9,168 @@ on:
       - main
     tags:
       - "*"
-    paths:
-      - '.github/workflows/release.yml'
-      - 'frontend/**'
-      - '**.sh'
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 's-ui.service'
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "26"
+  CRONET_GO_REPO: https://github.com/sagernet/cronet-go.git
+  BOOTLIN_BASE_URL: https://toolchains.bootlin.com/downloads/releases/toolchains
+  LIBCRONET_BASE_URL: "https://github.com/SagerNet/cronet-go/releases/latest/download"
 
 jobs:
-  build-linux:
-    strategy:
-      matrix:
-        platform:
-          - amd64
-          - arm64
-          - armv7
-          - armv6
-          - armv5
-          - 386
-          - s390x
-    runs-on: ubuntu-latest
+  test:
+    # Skipped on a tag and on a published release: both ship a commit that
+    # already went through this gate on main.
+    if: ${{ github.event_name != 'release' && !startsWith(github.ref, 'refs/tags/') }}
+    uses: ./.github/workflows/test.yml
+
+  build-frontend:
+    needs: test
+    # A skipped gate is not a failed one, so the build still runs on a tag.
+    if: ${{ always() && needs.test.result != 'failure' && needs.test.result != 'cancelled' }}
+    runs-on: ubuntu-26.04
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v5.0.0
+      - name: Checkout repository (frontend only)
+        uses: actions/checkout@v7
         with:
           submodules: recursive
-          fetch-depth: 0
-
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          cache: false
-          go-version-file: go.mod
+          fetch-depth: 1
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v7
         with:
-          node-version: '22'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Build frontend
         run: |
           cd frontend
-          npm install
+          npm ci
           npm run build
           cd ..
-          mv frontend/dist web/html
-          rm -fr frontend
 
-      - name: Build s-ui
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+  build-linux:
+    name: build-${{ matrix.platform }}
+    needs: build-frontend
+    # The `always()` on build-frontend only rescues that job: a skipped `test`
+    # keeps propagating down the graph unless every dependent repeats it.
+    if: ${{ always() && needs.build-frontend.result == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: amd64, arch: amd64, bootlin: x86-64, naive: true }
+          - { platform: arm64, arch: arm64, bootlin: aarch64, naive: true }
+          - { platform: armv7, arch: arm, goarm: "7", bootlin: armv7-eabihf, naive: true }
+          - { platform: armv6, arch: arm, goarm: "6", bootlin: armv6-eabihf, naive: false }
+          - { platform: armv5, arch: arm, goarm: "5", bootlin: armv5-eabi, naive: false }
+          - { platform: "386", arch: "386", bootlin: x86-i686, naive: true }
+          - { platform: s390x, arch: s390x, bootlin: s390x-z13, naive: false }
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Download frontend dist
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: web/html
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          cache: false
+          go-version-file: go.mod
+
+      - name: Locate Go module cache
+        id: go-env
+        run: echo "modcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Go module cache
+        id: go-mod-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.go-env.outputs.modcache }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum') }}
+
+      - name: Resolve cronet-go commit
+        if: matrix.naive
         run: |
-          export CGO_ENABLED=1
-          export GOOS=linux
-          export GOARCH=${{ matrix.platform }}
-          # Use Bootlin prebuilt cross-toolchains (musl 1.2.5 in stable series)
-          case "${{ matrix.platform }}" in
-            amd64) BOOTLIN_ARCH="x86-64" ;;
-            arm64) BOOTLIN_ARCH="aarch64" ;;
-            armv7) BOOTLIN_ARCH="armv7-eabihf"; export GOARCH=arm GOARM=7 ;;
-            armv6) BOOTLIN_ARCH="armv6-eabihf"; export GOARCH=arm GOARM=6 ;;
-            armv5) BOOTLIN_ARCH="armv5-eabi"; export GOARCH=arm GOARM=5 ;;
-            386) BOOTLIN_ARCH="x86-i686" ;;
-            s390x) BOOTLIN_ARCH="s390x-z13" ;;
-          esac
+          set -euo pipefail
+          SHORT=$(go list -m -f '{{.Version}}' github.com/sagernet/cronet-go | sed 's/.*-//')
+          FULL=$(curl -fsSL "https://api.github.com/repos/SagerNet/cronet-go/commits/${SHORT}" | jq -r '.sha')
+          [ -n "$FULL" ] && [ "$FULL" != "null" ] || { echo "could not resolve cronet-go commit ${SHORT}" >&2; exit 1; }
+          echo "cronet-go: $FULL"
+          echo "CRONET_COMMIT=$FULL" >> "$GITHUB_ENV"
+
+      # Naive platforms: use cronet toolchain only (no Bootlin).
+      - name: Clone cronet-go (cronet toolchain for naive)
+        if: matrix.naive
+        run: |
+          set -e
+          git init ~/cronet-go
+          git -C ~/cronet-go remote add origin ${{ env.CRONET_GO_REPO }}
+          git -C ~/cronet-go fetch --depth=1 origin "${{ env.CRONET_COMMIT }}"
+          git -C ~/cronet-go checkout FETCH_HEAD
+          git -C ~/cronet-go submodule update --init --recursive --depth=1
+
+      - name: Regenerate Debian keyring (cronet sysroot)
+        if: matrix.naive
+        run: |
+          set -e
+          rm -f ~/cronet-go/naiveproxy/src/build/linux/sysroot_scripts/keyring.gpg
+          cd ~/cronet-go
+          GPG_TTY=/dev/null ./naiveproxy/src/build/linux/sysroot_scripts/generate_keyring.sh
+
+      - name: Cache Chromium toolchain
+        if: matrix.naive
+        id: cache-chromium-toolchain
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/cronet-go/naiveproxy/src/third_party/llvm-build/
+            ~/cronet-go/naiveproxy/src/gn/out/
+            ~/cronet-go/naiveproxy/src/chrome/build/pgo_profiles/
+            ~/cronet-go/naiveproxy/src/out/sysroot-build/
+          key: chromium-toolchain-${{ matrix.platform }}-musl-${{ env.CRONET_COMMIT }}
+
+      - name: Build cronet lib and set toolchain env (CC, CXX, CGO_LDFLAGS, PATH)
+        if: matrix.naive
+        run: |
+          set -e
+          cd ~/cronet-go
+          go run ./cmd/build-naive --target=linux/${{ matrix.arch }} --libc=musl download-toolchain
+          go run ./cmd/build-naive --target=linux/${{ matrix.arch }} --libc=musl env | while IFS= read -r line; do
+            line="${line#export }"
+            [[ -z "$line" ]] && continue
+            echo "$line" >> $GITHUB_ENV
+          done
+
+      - name: Set Go build env (all platforms)
+        run: |
+          echo "CGO_ENABLED=1" >> $GITHUB_ENV
+          echo "GOOS=linux" >> $GITHUB_ENV
+          echo "GOARCH=${{ matrix.arch }}" >> $GITHUB_ENV
+          if [ -n "${{ matrix.goarm }}" ]; then echo "GOARM=${{ matrix.goarm }}" >> $GITHUB_ENV; fi
+
+      # Non-naive platforms only: Bootlin musl (armv5, s390x).
+      - name: Set up Bootlin musl (armv5, s390x)
+        if: ${{ matrix.naive != true }}
+        run: |
+          set -e
+          BOOTLIN_ARCH="${{ matrix.bootlin }}"
           echo "Resolving Bootlin musl toolchain for arch=$BOOTLIN_ARCH (platform=${{ matrix.platform }})"
-          TARBALL_BASE="https://toolchains.bootlin.com/downloads/releases/toolchains/$BOOTLIN_ARCH/tarballs/"
+          TARBALL_BASE="${{ env.BOOTLIN_BASE_URL }}/$BOOTLIN_ARCH/tarballs/"
           TARBALL_URL=$(curl -fsSL "$TARBALL_BASE" | grep -oE "${BOOTLIN_ARCH}--musl--stable-[^\"]+\\.tar\\.xz" | sort -r | head -n1)
           [ -z "$TARBALL_URL" ] && { echo "Failed to locate Bootlin musl toolchain for arch=$BOOTLIN_ARCH" >&2; exit 1; }
           echo "Downloading: $TARBALL_URL"
@@ -83,15 +178,52 @@ jobs:
           curl -fL -sS -o "$(basename "$TARBALL_URL")" "$TARBALL_BASE/$TARBALL_URL"
           tar -xf "$(basename "$TARBALL_URL")"
           TOOLCHAIN_DIR=$(find . -maxdepth 1 -type d -name "${BOOTLIN_ARCH}--musl--stable-*" | head -n1)
-          export PATH="$(realpath "$TOOLCHAIN_DIR")/bin:$PATH"
-          export CC=$(realpath "$(find "$TOOLCHAIN_DIR/bin" -name '*-gcc.br_real' -type f -executable | head -n1)")
-          [ -z "$CC" ] && { echo "No gcc.br_real found in $TOOLCHAIN_DIR/bin" >&2; exit 1; }
-          cd -
+          TOOLCHAIN_DIR="$(realpath "$TOOLCHAIN_DIR")"
+          BIN_DIR="$TOOLCHAIN_DIR/bin"
+          echo "PATH=$BIN_DIR:$PATH" >> $GITHUB_ENV
+          CC=$(find "$BIN_DIR" -maxdepth 1 \( -name '*-gcc.br_real' -o -name '*-gcc' \) -type f -executable 2>/dev/null | grep -v g++ | head -n1)
+          [ -z "$CC" ] && { echo "No gcc found in $BIN_DIR" >&2; exit 1; }
+          echo "CC=$(realpath "$CC")" >> $GITHUB_ENV
+          SYSROOT=""
+          F=$(find "$TOOLCHAIN_DIR" -name "libc-header-start.h" 2>/dev/null | head -1)
+          if [ -n "$F" ]; then SYSROOT=$(dirname "$(dirname "$(dirname "$(dirname "$F")")")"); fi
+          if [ -n "$SYSROOT" ] && [ -d "$SYSROOT" ]; then
+            echo "CGO_CFLAGS=--sysroot=$SYSROOT" >> $GITHUB_ENV
+            echo "CGO_LDFLAGS=--sysroot=$SYSROOT -static" >> $GITHUB_ENV
+          fi
 
-          ### Build s-ui
-          go build -ldflags="-w -s -linkmode external -extldflags '-static'" -tags "with_quic,with_grpc,with_utls,with_acme,with_gvisor" -o sui main.go
+      - name: Download Go modules (with retry)
+        run: |
+          set -e
+          export GODEBUG=http2client=0
+          for i in 1 2 3 4 5; do
+            if go mod download -x; then
+              echo "go mod download succeeded"
+              exit 0
+            fi
+            echo "go mod download failed (attempt $i), retrying in $((i * 10))s..."
+            sleep $((i * 10))
+          done
+          echo "go mod download failed after 5 attempts" >&2
+          exit 1
+
+      - name: Save Go module cache
+        if: matrix.platform == 'amd64' && steps.go-mod-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.go-env.outputs.modcache }}
+          key: ${{ steps.go-mod-cache.outputs.cache-primary-key }}
+
+      - name: Build s-ui
+        run: |
+          set -e
+          . ./build-tags.sh
+          if [ "${{ matrix.naive }}" = "true" ]; then PROFILE=release; else PROFILE=test; fi
+          TAGS=$(tags_for "$PROFILE")
+          LDFLAGS=$(ldflags_for "$PROFILE")
+          go build -ldflags="$LDFLAGS -linkmode external -extldflags '-static'" -tags "$TAGS" -o sui main.go
           file sui
-          ldd sui || echo "Static binary confirmed"
+          ldd sui 2>/dev/null || echo "Static binary confirmed"
 
           mkdir s-ui
           cp sui s-ui/
@@ -101,20 +233,148 @@ jobs:
       - name: Package
         run: tar -zcvf s-ui-linux-${{ matrix.platform }}.tar.gz s-ui
 
-      - name: Upload files to Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
         with:
           name: s-ui-linux-${{ matrix.platform }}
           path: ./s-ui-linux-${{ matrix.platform }}.tar.gz
           retention-days: 30
 
+  build-windows:
+    needs: build-frontend
+    if: ${{ always() && needs.build-frontend.result == 'success' }}
+    name: build-windows-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: amd64, runner: windows-2022, cgo: "1" }
+          - { arch: arm64, runner: ubuntu-26.04, cgo: "0" }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Download frontend artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: frontend-dist
+          path: web/html
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          cache: false
+          go-version-file: go.mod
+
+      - name: Locate Go module cache
+        id: go-env
+        shell: bash
+        run: echo "modcache=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Go module cache
+        id: go-mod-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ steps.go-env.outputs.modcache }}
+          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum') }}
+
+      - name: Install zip for Windows
+        if: matrix.arch == 'amd64'
+        shell: powershell
+        run: |
+          # Install Chocolatey if not available
+          if (!(Get-Command choco -ErrorAction SilentlyContinue)) {
+            Set-ExecutionPolicy Bypass -Scope Process -Force
+            [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+            iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+          }
+          # Install zip
+          choco install zip -y
+
+      - name: Build s-ui
+        shell: bash
+        run: |
+          export CGO_ENABLED=${{ matrix.cgo }}
+          export GOOS=windows
+          export GOARCH=${{ matrix.arch }}
+          
+          echo "Building for Windows ${{ matrix.arch }}"
+          go version
+          go env GOOS GOARCH
+          
+          . ./build-tags.sh
+          TAGS=$(tags_for windows)
+          LDFLAGS=$(ldflags_for windows)
+          go build -ldflags="$LDFLAGS" -tags "$TAGS" -o sui.exe main.go
+          file sui.exe
+          
+          mkdir s-ui-windows
+          cp sui.exe s-ui-windows/
+          cp -r windows/* s-ui-windows/
+
+      - name: Save Go module cache
+        if: runner.os == 'Windows' && steps.go-mod-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ steps.go-env.outputs.modcache }}
+          key: ${{ steps.go-mod-cache.outputs.cache-primary-key }}
+
+      - name: Download libcronet-go
+        shell: bash
+        run: |
+          curl -qsL -o s-ui-windows/libcronet.dll ${{ env.LIBCRONET_BASE_URL }}/libcronet-windows-${{ matrix.arch }}.dll
+
+      - name: Package
+        shell: bash
+        run: |
+          zip -r "s-ui-windows-${{ matrix.arch }}.zip" s-ui-windows
+
+      - name: Upload files to Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: s-ui-windows-${{ matrix.arch }}
+          path: ./s-ui-windows-${{ matrix.arch }}.zip
+          retention-days: 30
+
+  # One place that touches the release, reached only once every build has
+  # succeeded. Publishing from each matrix leg left a half-populated release
+  # behind whenever one platform failed, and the two copies of this step had
+  # drifted to different tag expressions.
+  publish:
+    needs: [build-linux, build-windows]
+    if: |
+      always() &&
+      needs.build-linux.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      ((github.event_name == 'release' && github.event.action == 'published') ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')))
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: s-ui-*
+          merge-multiple: true
+          path: dist
+
+      # install.sh verifies this before extracting, so a release without it
+      # silently falls back to an unauthenticated install.
+      - name: Generate SHA256SUMS
+        run: |
+          set -e
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Upload to Release
         uses: svenstaro/upload-release-action@v2
-        if: github.event_name == 'release' && github.event.action == 'published'
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref }}
-          file: s-ui-linux-${{ matrix.platform }}.tar.gz
-          asset_name: s-ui-linux-${{ matrix.platform }}.tar.gz
+          tag: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+          file: dist/*
+          file_glob: true
           prerelease: true
           overwrite: true
